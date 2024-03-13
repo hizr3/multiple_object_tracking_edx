@@ -21,6 +21,12 @@ classdef hypothesisReduction
             %       pruning) x 1 vector   
             %       multiHypotheses: (number of hypotheses after pruning) x
             %       1 structure  
+
+
+           % REMEMBER THIS ONLY WANTS THE INTEGER INDEXES AND NOT THE ACTUAL HYPOTHESES STRUCTS
+
+
+
            admitted  =  hypothesesWeight > threshold ;
            % disp(multiHypotheses)
            multiHypotheses = multiHypotheses(admitted) ; 
@@ -42,6 +48,12 @@ classdef hypothesisReduction
             %       capping) x 1 vector 
             %       multiHypotheses: (number of hypotheses after capping) x
             %       1 structure 
+
+           % REMEMBER THIS ONLY WANTS THE INTEGER INDEXES AND NOT THE ACTUAL HYPOTHESES STRUCTS
+
+
+
+
             if size(multiHypotheses,1) <= M
                 hypothesesWeight = hypothesesWeight ; 
                 multiHypotheses  = multiHypotheses ;
