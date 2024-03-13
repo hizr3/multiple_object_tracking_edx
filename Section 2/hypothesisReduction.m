@@ -22,6 +22,7 @@ classdef hypothesisReduction
             %       multiHypotheses: (number of hypotheses after pruning) x
             %       1 structure  
            admitted  =  hypothesesWeight > threshold ;
+           % disp(multiHypotheses)
            multiHypotheses = multiHypotheses(admitted) ; 
            hypothesesWeight = hypothesesWeight(admitted);
          
