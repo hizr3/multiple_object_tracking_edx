@@ -61,20 +61,26 @@ classdef GaussianDensity
             %                   P: updated object state covariance ---
             %                   (state dimension) x (state dimension)
             %                   matrix  
+
+           % Pull state mean and covariance from object
+           x_PRED = state_pred.x;
+           P_PRED = state_pred.P;
+           %disp(x_PRED)
+           %disp(P_PRED)
             
             %Measurement model Jacobian
-            Hx = measmodel.H(state_pred.x);
+            Hx = measmodel.H(x_PRED);
             %Innovation covariance
-            S = Hx*state_pred.P*Hx' + measmodel.R;
+            S = Hx*P_PRED*Hx' + measmodel.R;
             %Make sure matrix S is positive definite
             S = (S+S')/2;
-            
-            K = (state_pred.P*Hx')/S;
+            % Kalman gain
+            K = (P_PRED*Hx')/S;
             
             %State update
-            state_upd.x = state_pred.x + K*(z - measmodel.h(state_pred.x));
+            state_upd.x = x_PRED + K*(z - measmodel.h(x_PRED));
             %Covariance update
-            state_upd.P = (eye(size(state_pred.x,1)) - K*Hx)*state_pred.P;
+            state_upd.P = (eye(size(x_PRED,1)) - K*Hx)*P_PRED;
             
         end
         
@@ -94,18 +100,23 @@ classdef GaussianDensity
             %OUTPUT: predicted_likelihood: predicted likelihood for
             %        each measurement in logarithmic scale --- (number of
             %        measurements) x 1 vector         
-            
+            % Pull state mean and covariance from object
+
+            x_PRED = state_pred.x;
+            P_PRED = state_pred.P;
+            %disp(x_PRED)
+            %disp(P_PRED)            
             
             %Measurement model Jacobian
-            Hx = measmodel.H(state_pred.x);
+            Hx = measmodel.H(x_PRED);
             %Innovation covariance
-            S = Hx*state_pred.P*Hx' + measmodel.R;
+            S = Hx*P_PRED*Hx' + measmodel.R;
             %Make sure matrix S is positive definite
             S = (S+S')/2;
             % object measurement prediction
-            zk = measmodel.h(state_pred.x);
-            predicted_likelihood = log_mvnpdf(z',zk',S);
-            
+            z_PRED = measmodel.h(x_PRED);
+            % Compute log likelyhood
+            predicted_likelihood = log_mvnpdf(z',z_PRED',S);
             
         end
         
@@ -129,15 +140,34 @@ classdef GaussianDensity
             %        meas_in_gate: boolean vector indicating whether the
             %        corresponding measurement is in the gate or not ---
             %        (number of measurements) x 1
-         
-             % Squared Mahalanobis distance
-            sq_md = @(x,y,S) (x-y)'*inv(S)*(x-y);
-            x_PRED = state_pred.x;
-            P_PRED = state_pred.P:
-            disp(x_PRED)
-            disp(P_PRED)
-            
-          
+             
+                 % Squared Mahalanobis distance function handle for later
+                sq_md = @(x,y,S) (x-y)'*inv(S)*(x-y);
+                % Pull state mean and covariance from object
+                x_PRED = state_pred.x;
+                P_PRED = state_pred.P;
+                %disp(x_PRED)
+                %disp(P_PRED)
+    
+                % Compute meas. prediction and innovation covariance
+                z_PRED = measmodel.h(x_PRED);
+                %disp(z_PRED)
+                H_loc = measmodel.H(x_PRED);
+                %disp(H_loc)
+                S = measmodel.R + H_loc*P_PRED*H_loc';
+                S = 0.5*(S + S');
+                %disp(S)
+                num_measurements = size(z,2);
+                meas_in_gate = zeros(num_measurements,1);
+                %%%%%
+                for i = 1 : num_measurements
+                    ingate = sq_md(z_PRED,z(:,i),S) < gating_size;
+                    if ingate
+                        meas_in_gate(i) = ingate ;
+                    end
+                end
+                meas_in_gate = logical(meas_in_gate);
+                z_ingate = z(:,meas_in_gate) ;
         end
         
         function state = momentMatching(w, states)
@@ -162,11 +192,20 @@ classdef GaussianDensity
                 return;
             end
             
-            
-   
             w = exp(w);
-            num_states = size(w,1);
-            
+            num_hypotheses = size(w,1);
+            length_x = size( states(1).x     ,   1 );
+            x_MERGE  =   zeros(length_x,1);
+            P_MERGE = zeros(length_x , length_x );
+
+            for i = 1 : num_hypotheses
+                x_MERGE = x_MERGE +  w(i)*states(i).x;
+            end
+            for i = 1 : num_hypotheses
+                P_MERGE = P_MERGE + w(i)*states(i).P + w(i)*(states(i).x - x_MERGE)*(states(i).x - x_MERGE)';
+            end
+            state.x = x_MERGE;
+            state.P = P_MERGE;
              
            
         end
