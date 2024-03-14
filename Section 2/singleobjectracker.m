@@ -53,8 +53,11 @@ classdef singleobjectracker
             obj.reduction.merging_threshold = merging_threshold;
             obj.reduction.M = M;
         end
-        
-        function estimates = nearestNeighbourFilter(obj, state, Z, sensormodel, motionmodel, measmodel)
+
+
+
+
+function estimates = nearestNeighbourFilter(obj, state, Z, sensormodel, motionmodel, measmodel)
             %NEARESTNEIGHBOURFILTER tracks a single object using nearest
             %neighbor association 
             %INPUT: state: a structure with two fields:
@@ -70,58 +73,55 @@ classdef singleobjectracker
             %OUTPUT:estimates: cell array of size (total tracking time, 1),
             %       each cell stores estimated object state of size (object
             %       state dimension) x 1   
-      
-            % Implementation of Nearest Neighbour Filter, full recursion %
 
-            %%%%%%%%%%%%%%%%%%%%%%%%
-              N = numel ( Z ) ; 
+            % % Implementation of Nearest Neighbour Filter , full recursion         
+            totalTrackTime = size(Z,1);
+            log_factor = log(sensormodel.P_D / sensormodel.lambda_c ) ;
+            log_wk_zero = log ( 1 - sensormodel.P_D ) ;
 
-              dim_state = size ( state.x , 1 ) ; 
-              dim_meas = size(Z{1},1) ;
-              
+            % Possible outputs
+            estimates = cell(totalTrackTime, 1);
+            estimates_x_P = cell(totalTrackTime, 1);
 
-              state_hat = cell (  N , 1 );
-              state_hat{1} = state;
-              estimates = cell( N , 1) ;
-              estimates{1} = state.x ;
-              
-              % useful parameters
-              log_wk_theta_factor = log(sensormodel.P_D / sensormodel.intensity_c);
-              wk_theta_zero  = 1 - sensormodel.P_D;
-              
-              for i = 1 : N
+            % useful parameters
+            log_detect_factor = log(sensormodel.P_D / sensormodel.intensity_c);
+            log_missed  = log(1 - sensormodel.P_D);
 
-                  z = Z{i} ; 
-                  % Gating
-                  [ z_ingate , meas_in_gate ] = obj.density.ellipsoidalGating( state , z , measmodel , obj.gating.size );
-                  
-                  % Number of hypotheses ( num meas + false detect hypothesis ) 
-                  mk = 1 + size(z_ingate,2);
-                   
-                  % If mk = 1 the state updated is skipped
-                  if mk > 1 
+            % iterate through timestamps
+            for i = 1 : totalTrackTime
+
+                % get current timestep measurements
+                z_i = Z{i};
+
+                % perform gating and find number of measurements inside limits
+                [z_ingate, ~] = obj.density.ellipsoidalGating(state, z_i, measmodel, obj.gating.size);
+                
+                if ~isempty(z_ingate)
                     likelihoodDensity = obj.density.predictedLikelihood(state, z_ingate, measmodel); 
-                    % The update formula is expressed through the log
-                    % likelihood for ease of use. remember that wk_factor
-                    % is P_D/intensity
-                    wk_theta = exp(log_wk_theta_factor + likelihoodDensity);                    
-                    % Find max hypothesis
+                    wk_theta = exp(log_detect_factor + likelihoodDensity);
+                    wk_zero  = exp(log_missed);
+
                     [max_wk_theta, index] = max(wk_theta);
-                    if(max_wk_theta >= wk_theta_zero) % If clutter intensity is greater, we skip the update step              
-                        state = obj.density.update(state, z_ingate(:,index), measmodel);
+                    if(max_wk_theta > wk_zero) 
+                        % Kalman update
+                        state = obj.density.update(state, z_ingate(:, index) , measmodel);
                     end
+                end
 
-                  end                            
-                  % Possible outputs
-                  state_hat{i} = state;
-                  estimates{i} = state.x ;
+                % updated state variables 
+                estimates{i}   = state.x;
+                estimates_x{i} = state.x;
 
-                  % Predict
-                  state = obj.density.predict(state, motionmodel);  
-              end
+                % predict the next state
+                state = obj.density.predict(state, motionmodel);
+            end	
 
-              %%%%%%%%%%%%%%%% END OF FUNCTION %%%%%%%%%%%%%%%%%%%
-        end
+
+end
+
+
+
+     
         
         
         function estimates = probDataAssocFilter(obj, state, Z, sensormodel, motionmodel, measmodel)
@@ -143,13 +143,22 @@ classdef singleobjectracker
        
             %%%%%%%%%%%%%%% Implementation of Probabilistic Ass Filter,
             %%%%%%%%%%%%%%% full recursion
-             N = numel ( Z ) ; 
-              estimates = cell( N , 1) ;
+             
+            % Implementation of Nearest Neighbour Filter , full recursion
+            total_tracking_time = numel(Z);
+            log_factor = log(sensormodel.P_D / sensormodel.lambda_c ) ;
+            log_wk_zero = log ( 1 - sensormodel.P_D ) ;
 
-              % useful parameters
-              log_wk_theta_factor = log(sensormodel.P_D / sensormodel.intensity_c);
-              log_wk_theta_zero  = log(1 - sensormodel.P_D); % Store it in log form for normalization purposes
+            % Possible outputs
+            estimates = cell(total_tracking_time , 1) ;
+            estimates_state_cov = cell(total_tracking_time , 1 ) ;
 
+            for i = 1 : total_tracking_time
+                z = Z{i}
+                %Gating
+            end
+            %%%%%
+             
               for i = 1 : N
 
                   z = Z{i} ; 
@@ -258,7 +267,7 @@ classdef singleobjectracker
                  [logWeights_new, multiHypotheses_new] = hypothesisReduction.cap(logWeights_new, multiHypotheses_new, obj.reduction.M);
                   logWeights_new = normalizeLogWeights(logWeights_new) ;
                  % extract object state estimate using the most probably hypothesis estimation;
-                  [maxWeight, index] = max(logWeights_new);                       
+                  [maxLogWeight, index] = max(logWeights_new);                       
                   % Possible outputs
                   newStateStruct =  multiHypotheses_new(index,1);
                   estimates{i} = newStateStruct.x ;
