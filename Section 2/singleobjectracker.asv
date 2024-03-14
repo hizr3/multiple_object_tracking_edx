@@ -231,10 +231,10 @@ end
 
 
             for i = 1 : totalTrackTime
-               
+                
                 % for each hypothesis, create missed detection hypothesis;
                 multiHypotheses_missed = multiHypotheses ;
-                log_weights_missed = log_weights + log_missed ;
+                log_weights_missed =   ;
                 % For each hypotheses perform gating and update
                 z_i = Z{i};
                 multiHypotheses_new = [] ;
@@ -242,18 +242,18 @@ end
                 for k = i : numHypotheses
                  [ z_ingate , ~ ] = ...
                  obj.density.ellipsoidalGating( multiHypotheses(k,1) , z_i , measmodel , obj.gating.size );
-                   num_ingate = size(z_ingate , 2 ) 
-                      for j = 1 : num_ingate
+                   num_ingate = size(z_ingate , 2 ) ;
+                   if num_ingate > 0
+                       for j = 1 : num_ingate
                            log_weights_new = [ log_weights_new  ; log_weights(k) + ...
                                                                   obj.density.predictedLikelihood( multiHypotheses(k,1) , z_ingate(:,j) , measmodel) ] ;
                            multiHypotheses_new = [ multiHypotheses_new  ; obj.density.update( multiHypotheses(k,1) , z_ingate(:,j), measmodel )  ] ;
                        end
+                   end
                 end
                 % normalise hypothsis weights;
                 log_weights = [ log_weights_new ; log_weights_missed ] ;
                 multiHypotheses = [ multiHypotheses_new ; multiHypotheses_missed ] ;
-                disp( "numHypotheses"  +  size(multiHypotheses,1)    +" at cycle " + i ) %Debug
-
                 log_weights = normalizeLogWeights(log_weights) ;
                 % prune hypotheses with small weights, and then re-normalise the weights;
                 [log_weights , multiHypotheses ] = ...
@@ -264,16 +264,15 @@ end
                 % cap the number of the hypotheses, and then re-normalise the weights;
                 [log_weights , multiHypotheses ] = ...
                  hypothesisReduction.cap(log_weights , multiHypotheses , obj.reduction.M);
-
                   log_weights = normalizeLogWeights(log_weights ) ;
-                % extract object state estimate using the most probable hypothesis estimation;
+                % extract object state estimate using the most probably hypothesis estimation;
                   [maxLogWeight, index] = max(log_weights);                       
                   % Possible outputs
                   extracted_struct =  multiHypotheses(index,1) ;
                   estimates{i} = extracted_struct.x ;
                   estimates_x_P{i} = extracted_struct ;
                   % for each hypothesis, perform prediction.
-                    numHypotheses = size(multiHypotheses,1) ;
+                  numHypotheses = size(multiHypotheses,1) 
                   for j = 1 : numHypotheses
                      multiHypotheses(j,1) = obj.density.predict( multiHypotheses(j,1) , motionmodel) ;
                   end
