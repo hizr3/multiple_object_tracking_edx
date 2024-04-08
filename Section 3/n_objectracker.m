@@ -53,10 +53,13 @@ classdef n_objectracker
             obj.reduction.merging_threshold = merging_threshold;
             obj.reduction.M = M;
         end
-        
-        function estimates = GNNfilter(obj, states, Z, sensormodel, motionmodel, measmodel)
-            %GNNFILTER tracks n object using global nearest neighbor
-            %association 
+      
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+        function estimates = TOMHT(obj, states, Z, sensormodel, motionmodel, measmodel)
+            %TOMHT tracks n object using track-oriented multi-hypothesis tracking
             %INPUT: obj: an instantiation of n_objectracker class
             %       states: structure array of size (1, number of objects)
             %       with two fields: 
@@ -72,19 +75,89 @@ classdef n_objectracker
             %OUTPUT:estimates: cell array of size (total tracking time, 1),
             %       each cell stores estimated object state of size (object
             %       state dimension) x (number of objects)
+
+            trackTime = numel(Z);
+            estimates  = cell(trackTime , 1);
+            num_objects = size(states , 2 );
+            log_detect = log(sensormodel.P_D / sensormodel.intensity_c);
+            log_miss  = log(1 - sensormodel.P_D);
+
+            %works
             
-            %total time
+            % for each local hypothesis in each hypothesis tree: 
+            % 1). implement ellipsoidal gating; 
+            % 2). calculate missed detection and predicted likelihood for
+            %     each measurement inside the gate and make sure to save
+            %     these for future use; 
+            % 3). create updated local hypotheses and make sure to save how
+            %     these connects to the old hypotheses and to the new the 
+            %     measurements for future use;
+            %
+            % for each predicted global hypothesis: 
+            % 1). create 2D cost matrix; 
+            % 2). obtain M best assignments using a provided M-best 2D 
+            %     assignment solver; 
+            % 3). update global hypothesis look-up table according to 
+            %     the M best assignment matrices obtained and use your new 
+            %     local hypotheses indexing;
+            %
+            % normalise global hypothesis weights and implement hypothesis
+            % reduction technique: pruning and capping;
+            %
+            % prune local hypotheses that are not included in any of the
+            % global hypotheses;
+            %
+            % Re-index global hypothesis look-up table;
+            %
+            % extract object state estimates from the global hypothesis
+            % with the highest weight;
+            %
+            % predict each local hypothesis in each hypothesis tree.
+            
+            local_trees = cell(1 , num_objects)
+            for k = 1 : num_objects
+                local_trees{k} = states(i);
+            end
+
+            for k = 1 : 1 % trackTime
+                z_k = Z{k}
+                mk = size(z_k , 2)
+
+            end
+            
+        end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
+        function [ estimates  ] = GNNfilter(obj, states, Z, sensormodel, motionmodel, measmodel)
+
+
+            % GNNFILTER tracks n object using global nearest neighbor
+            % association 
+            % INPUT: obj: an instantiation of n_objectracker class
+            %       states: structure array of size (1, number of objects)
+            %       with two fields: 
+            %                x: object initial state mean --- (object state
+            %                dimension) x 1 vector 
+            %                P: object initial state covariance --- (object
+            %                state dimension) x (object state dimension)
+            %                matrix  
+            %       Z: cell array of size (total tracking time, 1), each
+            %       cell stores measurements of size (measurement
+            %       dimension) x (number of measurements at corresponding
+            %       time step)  
+            % OUTPUT:estimates: cell array of size (total tracking time, 1),
+            %       each cell stores estimated object state of size (object
+            %       state dimension) x (number of objects)
+
+
             totalTrackTime = numel(Z);
-            % results
             estimates = cell(totalTrackTime,1);
             num_objects = size(states , 2 );
+            log_detect = log(sensormodel.P_D / sensormodel.intensity_c);
+            log_miss  = log(1 - sensormodel.P_D);
 
-
-            log_wk_theta_factor = log(sensormodel.P_D / sensormodel.intensity_c);
-            log_wk_zero_factor  = log(1 - sensormodel.P_D);
-
-            for k = 1 : 1
-                % Perform gating
+            for k = 1 : totalTrackTime
+              
                 z_k = Z{k};
                 num_meas_k = size(z_k , 2 );
                 assignments = zeros(num_objects , num_meas_k);
@@ -92,25 +165,220 @@ classdef n_objectracker
                     [~, index] = obj.density.ellipsoidalGating( states(i) , z_k, measmodel, obj.gating.size);
                     assignments(i,:) = index';
                 end
-                assignments_ingate = sum( assignments , 1 ) > 0 
-                % Compute measurements in gate
-                z_k_ingate  = z_k(:,assignments_ingate) ;
+                assignments_ingate = sum( assignments , 1 ) > 0 ;
+                assignments = assignments(: , assignments_ingate );
+                z_k_ingate  = z_k(:,assignments_ingate);
                 num_meas_k = size(z_k_ingate , 2 );
+                L = inf(num_objects , num_meas_k + num_objects);
 
-                costMatrix = inf(num_objects , num_meas_k + num_objects)
                  for i = 1 : num_objects
                      for j = 1 : num_meas_k
-                         lij = 1;
+                         if assignments(i,j) == 1 
+                         H_ih = measmodel.H(states(i).x);
+                         S_ih = H_ih*states(i).P*H_ih' + measmodel.R;
+                         inn_ih = z_k_ingate(:,j) - measmodel.h(states(i).x);
+                         lij = -log_detect ;
+                         lij = lij + 0.5*log(det(2*pi*S_ih));
+                         lij = lij + 0.5*((inn_ih)')*inv(S_ih)*(inn_ih);
                          L(i,j) = lij;
+                         end
                      end
                  end
-                 L(:,num_meas_k : num_meas_k + num_objects ) = 
 
-            end
-            % end for
+                 L_miss = L(: , num_meas_k +1  : num_meas_k + num_objects  );
+                 L_miss(boolean(eye(num_objects))) = -log_miss*ones(1,num_objects);
+                 L(:,num_meas_k + 1 : num_meas_k + num_objects) =  L_miss;
+
+                 % Find assigment
+                 [col4row,~,gain]=assign2D(L);
+                    if gain == -1
+                        disp("unfeasable at step " + num2str(k))
+                    end
 
 
+                 for i = 1 : num_objects
+                     if col4row(i) <= num_meas_k
+                       states(i) = obj.density.update(states(i), z_k_ingate(:,col4row(i) ), measmodel);
+                     end                 
+                    estimates{k}(:,i) = states(i).x;
+                    states(i) = obj.density.predict( states(i) , motionmodel);
+                 end
+              
+            end           
         end
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+function estimates = JPDAfilter(obj, states, Z, sensormodel, motionmodel, measmodel)
+            %JPDAFILTER tracks n object using joint probabilistic data
+            %association
+            %INPUT: obj: an instantiation of n_objectracker class
+            %       states: structure array of size (1, number of objects)
+            %       with two fields: 
+            %                x: object initial state mean --- (object state
+            %                dimension) x 1 vector 
+            %                P: object initial state covariance --- (object
+            %                state dimension) x (object state dimension)
+            %                matrix  
+            %       Z: cell array of size (total tracking time, 1), each
+            %       cell stores measurements of size (measurement
+            %       dimension) x (number of measurements at corresponding
+            %       time step)  
+            %OUTPUT:estimates: cell array of size (total tracking time, 1),
+            %       each cell stores estimated object state of size (object
+            %       state dimension) x (number of objects)
+
+            % 1. implement ellipsoidal gating for each local hypothesis
+            % seperately; OK
+            % 2. construct 2D cost matrix of size (number of objects, number of measurements that at least fall inside the gates + number of objects);
+            % 3. find the M best assignment matrices using a M-best 2D assignment solver;
+            % 4. normalise the weights of different data association hypotheses;
+            % 5. prune assignment matrices that correspond to data association hypotheses with low weights and renormalise the weights;
+            % 6. create new local hypotheses for each of the data association results;
+            % 7. merge local hypotheses that correspond to the same object by moment matching;
+            % 8. extract object state estimates;
+            % 9. predict each local hypothesis.
+
+            totalTrackTime = numel(Z);
+            estimates = cell(totalTrackTime,1);
+            num_objects = size(states , 2 );
+            log_detect = log(sensormodel.P_D / sensormodel.intensity_c);
+            log_miss  = log(1 - sensormodel.P_D);
+             M = obj.reduction.M;
+
+
+            for k = 1 : totalTrackTime
+                % Gating and cost matrix
+                z_k = Z{k};
+                mk = size( z_k , 2 );
+                L  =  inf(num_objects , num_objects + mk );
+                admitted = zeros(num_objects , mk );
+                for i = 1 : num_objects
+                    for j = 1 : mk 
+                    [~, index] = obj.density.ellipsoidalGating( states(i) , z_k(:,j), measmodel, obj.gating.size);
+                    admitted(i,j) = index;
+                    if index
+                             H_ih = measmodel.H(states(i).x);
+                             S_ih = H_ih*states(i).P*H_ih' + measmodel.R;
+                             inn_ih = z_k(:,j) - measmodel.h(states(i).x);
+                             lij = -log_detect ;
+                             lij = lij + 0.5*log(det(2*pi*S_ih));
+                             lij = lij + 0.5*((inn_ih)')*inv(S_ih)*(inn_ih);
+                             L(i,j) = lij;
+                        end
+                    end
+                    L( i , mk + i ) = log_miss;
+                end
+                % if the column sum of inf elements is == to num objects
+                % its full of inf values 
+                noninf_cols = sum(isinf(L)) < num_objects;
+                L = L(:, noninf_cols);
+                z_k = z_k(:, noninf_cols(1:mk));
+                mk = size(z_k,2) ; 
+                %%%%%%%%%%%%%%%%
+
+                % Find M assignments i e data associations
+                [theta, ~, ~]= kBest2DAssign(L, M);
+                %%%%%%%%%%%%%%%%%%%%%%%%%
+                
+                % Normalize log weights. There might not be as hypotheses
+                % as data associations. Why ? 
+                M = size(theta , 2) ;
+                log_w = zeros(M , 1 );
+                for iM = 1 : M
+                    % sum over the every row ( objects ) and the specific
+                    % data association column
+                    tr_AL = sum(L(sub2ind(size(L),1:num_objects, theta(:,iM)')));
+                    log_w(iM) = -tr_AL;
+                end
+                %give a value to the misdetection
+                theta(theta>mk) = mk + 1 ;
+                log_w = normalizeLogWeights(log_w) ; 
+                %%%%%%%%%%%%%%%%%%%%%%%%%%%
+                % 5. prune assignment matrices that correspond to data association
+                % hypotheses with low weights and renormalise the weights
+                
+                % hypo index
+                hyp = 1 : M ; 
+                [log_w, hyp] = hypothesisReduction.prune( log_w, hyp, obj.reduction.w_min );
+                theta = theta(:,hyp);
+                log_w = normalizeLogWeights(log_w) ; 
+
+                %%%%%%%%%%%%%%%%%%%%%
+                % 6. create new local hypotheses for each of the data association results;
+                beta = zeros(num_objects,mk+1);   % marg. prob that a object i=1:n is associated to meas. j=0:m
+                % since its a marginal of i we need to saturate over the
+                % measurements
+                
+                for i = 1 : num_objects
+                    for i_theta = 1 : size(theta , 2 )
+                        % take the measurement index
+                        j = theta(i,i_theta); % object i is associated to which meas. j in data ass. i_theta
+                        beta(i,j) = beta(i,j) + exp(log_w(i_theta));
+                    end
+                end
+                % if we saturate over the objects now ( row sum ) we get 1
+                % as every object is either misdetected of identified
+                %sum(beta , 2)
+
+                %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+            % 7. merge local hypotheses that correspond to the same object by moment matching;  
+
+                for i = 1 : num_objects
+                    P_pred = states(i).P;
+                    x_pred = states(i).x;
+
+                     H = measmodel.H(x_pred);
+                     innCov = H*P_pred*H' + measmodel.R;
+                     innCov = 0.5*(innCov + innCov');
+                     K = P_pred*H'*inv(innCov);
+                    
+                     eps_mu = zeros(size(z_k , 1) , 1);
+                     eps_cov = zeros( size(z_k , 1 ) , size(z_k , 1) ) ; 
+
+                     for j = 1 : mk
+                         eps_ij = z_k(:,j) - measmodel.h(x_pred) ;
+                         % weighted average innovation
+                         eps_mu = eps_mu  +  beta(i,j)*eps_ij;
+                         eps_cov = eps_cov + beta(i,j)*eps_ij*eps_ij';
+
+
+                     end
+                     
+                     P_bar_i = P_pred - K*(innCov)*K' ;
+                    P_tilde_i = K * ( eps_cov - eps_mu*eps_mu' ) * K' ;
+
+                     states(i).x = x_pred + K * eps_mu ;
+                     % covariance increases  ( as it should )
+                     states(i).P = beta(i,mk+1)*P_pred + ...
+                         (1 - beta(i,mk+1) ) * P_bar_i + ...
+                         P_tilde_i ; 
+                end
+                
+                % now i think we should have less hypothesis than when
+                % started , but we have multiple copies of them
+                %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+               % 8. extract object state estimates;
+
+               for i =   1    :   num_objects
+                    estimates{k}(:,i) = states(i).x;
+               end
+
+
+               %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+               % 9. predict each local hypothesis. array fun applies the
+               % function using each index of states as input to the call
+              states = arrayfun(@(s) obj.density.predict(s,motionmodel), states );
+
+
+         
+            end
+
+
+
+            
+end     
+
+%%%%%%%%%%%%%%%%%%%
+
     end
 end
-
