@@ -53,13 +53,10 @@ classdef n_objectracker
             obj.reduction.merging_threshold = merging_threshold;
             obj.reduction.M = M;
         end
-      
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-        function estimates = TOMHT(obj, states, Z, sensormodel, motionmodel, measmodel)
-            %TOMHT tracks n object using track-oriented multi-hypothesis tracking
+        
+        function estimates = GNNfilter(obj, states, Z, sensormodel, motionmodel, measmodel)
+            %GNNFILTER tracks n object using global nearest neighbor
+            %association 
             %INPUT: obj: an instantiation of n_objectracker class
             %       states: structure array of size (1, number of objects)
             %       with two fields: 
@@ -75,140 +72,47 @@ classdef n_objectracker
             %OUTPUT:estimates: cell array of size (total tracking time, 1),
             %       each cell stores estimated object state of size (object
             %       state dimension) x (number of objects)
-
-            trackTime = numel(Z);
-            estimates  = cell(trackTime , 1);
-            num_objects = size(states , 2 );
-            log_detect = log(sensormodel.P_D / sensormodel.intensity_c);
-            log_miss  = log(1 - sensormodel.P_D);
-
-            %works
-            
-            % for each local hypothesis in each hypothesis tree: 
-            % 1). implement ellipsoidal gating; 
-            % 2). calculate missed detection and predicted likelihood for
-            %     each measurement inside the gate and make sure to save
-            %     these for future use; 
-            % 3). create updated local hypotheses and make sure to save how
-            %     these connects to the old hypotheses and to the new the 
-            %     measurements for future use;
-            %
-            % for each predicted global hypothesis: 
-            % 1). create 2D cost matrix; 
-            % 2). obtain M best assignments using a provided M-best 2D 
-            %     assignment solver; 
-            % 3). update global hypothesis look-up table according to 
-            %     the M best assignment matrices obtained and use your new 
-            %     local hypotheses indexing;
-            %
-            % normalise global hypothesis weights and implement hypothesis
-            % reduction technique: pruning and capping;
-            %
-            % prune local hypotheses that are not included in any of the
-            % global hypotheses;
-            %
-            % Re-index global hypothesis look-up table;
-            %
-            % extract object state estimates from the global hypothesis
-            % with the highest weight;
-            %
-            % predict each local hypothesis in each hypothesis tree.
-            
-            local_trees = cell(1 , num_objects)
-            for k = 1 : num_objects
-                local_trees{k} = states(i);
-            end
-
-            for k = 1 : 1 % trackTime
-                z_k = Z{k}
-                mk = size(z_k , 2)
-
-            end
-            
-        end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-        
-        function [ estimates  ] = GNNfilter(obj, states, Z, sensormodel, motionmodel, measmodel)
-
-
-            % GNNFILTER tracks n object using global nearest neighbor
-            % association 
-            % INPUT: obj: an instantiation of n_objectracker class
-            %       states: structure array of size (1, number of objects)
-            %       with two fields: 
-            %                x: object initial state mean --- (object state
-            %                dimension) x 1 vector 
-            %                P: object initial state covariance --- (object
-            %                state dimension) x (object state dimension)
-            %                matrix  
-            %       Z: cell array of size (total tracking time, 1), each
-            %       cell stores measurements of size (measurement
-            %       dimension) x (number of measurements at corresponding
-            %       time step)  
-            % OUTPUT:estimates: cell array of size (total tracking time, 1),
-            %       each cell stores estimated object state of size (object
-            %       state dimension) x (number of objects)
-
-
-            totalTrackTime = numel(Z);
-            estimates = cell(totalTrackTime,1);
-            num_objects = size(states , 2 );
-            log_detect = log(sensormodel.P_D / sensormodel.intensity_c);
-            log_miss  = log(1 - sensormodel.P_D);
-
-            for k = 1 : totalTrackTime
-              
-                z_k = Z{k};
-                num_meas_k = size(z_k , 2 );
-                assignments = zeros(num_objects , num_meas_k);
-                for i = 1 : num_objects
-                    [~, index] = obj.density.ellipsoidalGating( states(i) , z_k, measmodel, obj.gating.size);
-                    assignments(i,:) = index';
-                end
-                assignments_ingate = sum( assignments , 1 ) > 0 ;
-                assignments = assignments(: , assignments_ingate );
-                z_k_ingate  = z_k(:,assignments_ingate);
-                num_meas_k = size(z_k_ingate , 2 );
-                L = inf(num_objects , num_meas_k + num_objects);
-
-                 for i = 1 : num_objects
-                     for j = 1 : num_meas_k
-                         if assignments(i,j) == 1 
-                         H_ih = measmodel.H(states(i).x);
-                         S_ih = H_ih*states(i).P*H_ih' + measmodel.R;
-                         inn_ih = z_k_ingate(:,j) - measmodel.h(states(i).x);
-                         lij = -log_detect ;
-                         lij = lij + 0.5*log(det(2*pi*S_ih));
-                         lij = lij + 0.5*((inn_ih)')*inv(S_ih)*(inn_ih);
-                         L(i,j) = lij;
-                         end
-                     end
-                 end
-
-                 L_miss = L(: , num_meas_k +1  : num_meas_k + num_objects  );
-                 L_miss(boolean(eye(num_objects))) = -log_miss*ones(1,num_objects);
-                 L(:,num_meas_k + 1 : num_meas_k + num_objects) =  L_miss;
-
-                 % Find assigment
-                 [col4row,~,gain]=assign2D(L);
-                    if gain == -1
-                        disp("unfeasable at step " + num2str(k))
+            N = length(states);
+            numSteps = length(Z);
+            mis_cost = -log(1-sensormodel.P_D);
+            estimates = cell(numSteps,1);
+            for k=1:numSteps
+                z = cell2mat(Z(k));
+                M = size(z,2);
+                
+                %Ellipsoidal Gating
+                [z_ingate, meas_in_gate] = arrayfun(@(state) GaussianDensity.ellipsoidalGating(state,z,measmodel,obj.gating.size),states,'UniformOutput',false);
+                %Cost Matrix
+                L = Inf(N,M+N); %We initialise for convenience a matrix of Inf elements
+                for i=1:N
+                    z_ingate_i = cell2mat(z_ingate(i));
+                    meas_in_gate_i = cell2mat(meas_in_gate(i));
+                    if ~isempty(z_ingate_i)
+                        L(i,meas_in_gate_i) = -(log(sensormodel.P_D) + GaussianDensity.predictedLikelihood(states(i),z_ingate_i,measmodel) - log(sensormodel.intensity_c));
                     end
-
-
-                 for i = 1 : num_objects
-                     if col4row(i) <= num_meas_k
-                       states(i) = obj.density.update(states(i), z_k_ingate(:,col4row(i) ), measmodel);
-                     end                 
-                    estimates{k}(:,i) = states(i).x;
-                    states(i) = obj.density.predict( states(i) , motionmodel);
-                 end
-              
-            end           
+                    L(i,M+i) = mis_cost;
+                end
+                %Reduction of the cost matrix
+                indexes = find(sum(cell2mat(meas_in_gate),2) == 0); %With this command we find the indexes of the measurements not falling in any gate
+                L(:,indexes) = [];
+                z(:,indexes) = [];
+                %Assignment problem solution
+                [col4row,~,~] = assign2D(L);
+                %We now create the new local hypotheses
+                if ~isempty(z)
+                    for i=1:N
+                        if col4row(i)<=size(z,2)
+                            states(i) = GaussianDensity.update(states(i),z(:,col4row(i)),measmodel);
+                        end
+                    end
+                end
+                estimates{k} = [states.x];
+                states = arrayfun(@(state) GaussianDensity.predict(state,motionmodel), states);
+                
+            end
         end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-function estimates = JPDAfilter(obj, states, Z, sensormodel, motionmodel, measmodel)
+        
+        function estimates = JPDAfilter(obj, states, Z, sensormodel, motionmodel, measmodel)
             %JPDAFILTER tracks n object using joint probabilistic data
             %association
             %INPUT: obj: an instantiation of n_objectracker class
@@ -226,159 +130,269 @@ function estimates = JPDAfilter(obj, states, Z, sensormodel, motionmodel, measmo
             %OUTPUT:estimates: cell array of size (total tracking time, 1),
             %       each cell stores estimated object state of size (object
             %       state dimension) x (number of objects)
+            N = length(states);
+            numSteps = length(Z);
+            mis_cost = -log(1-sensormodel.P_D);
+            estimates = cell(numSteps,1);
+            for k=1:numSteps
+                z = cell2mat(Z(k));
+                M = size(z,2);
+                %Ellipsoidal Gating
+                [z_ingate, meas_in_gate] = arrayfun(@(state) GaussianDensity.ellipsoidalGating(state,z,measmodel,obj.gating.size),states,'UniformOutput',false);
+                
+                %Cost Matrix
+                L = Inf(N,M+N); %We initialise for convenience a matrix of Inf elements
+                for i=1:N
+                    z_ingate_i = cell2mat(z_ingate(i));
+                    meas_in_gate_i = cell2mat(meas_in_gate(i));
+                    if ~isempty(z_ingate_i)
+                        L(i,meas_in_gate_i) = -(log(sensormodel.P_D) + GaussianDensity.predictedLikelihood(states(i),z_ingate_i,measmodel) - log(sensormodel.intensity_c));
+                    end
+                    L(i,M+i) = mis_cost;
+                end
+                %Reduction of the cost matrix
+                indexes = find(sum(cell2mat(meas_in_gate),2) == 0); %With this command we find the indexes of the measurements not falling in any gate
+                L(:,indexes) = []; % We remove columns in the cost matrix with only Inf
+                z(:,indexes) = [];
+                %Assignment problem solution
+                [col4rowBest,~,gain] = kBest2DAssign(L,obj.reduction.M);
+                
+                
+                %Here we compute the normalised data association probabilities in the
+                %log domain
+                logDAWeights = -gain;
+                logDAWeights = normalizeLogWeights(logDAWeights);
+                
+                %Prune assignment matrices that correspond to data
+                %association hypotheses with low weights and renormalise
+                %the weights
+                hypIndexes = 1:length(logDAWeights);
+                [logDAWeights, hypIndexes] = hypothesisReduction.prune(logDAWeights, hypIndexes, obj.reduction.w_min);
+                logDAWeights = normalizeLogWeights(logDAWeights);
+                col4rowBest = col4rowBest(:,hypIndexes);
+              
+                %We now create new local hypotheses for each of the data
+                %association results. We compute approximated marginal
+                %probabilities because in the moment matching phase we will
+                %need the weights for every local hypothesis
+                betaij = zeros(N,size(z,2));
+                for i=1:N
+                    for j=1:size(z,2)
+                        indexes = find(col4rowBest(i,:)==j);
+                        betaij(i,j) = sum(exp(logDAWeights(indexes)));
+                    end
+                end
+                
+                betai0 = 1-sum(betaij,2);
+ 
+                %We can now create new hypotheses for each association
+                %result
+                for i=1:N
+                    llh = [];
+                    hypotheses = [];
+                    thetai = unique(col4rowBest(i,:));
+                    %Take only detection indexes, we manage the
+                    %misdetection component separately
+                    ind = find(thetai<=size(z,2)); %Every index above the number of measurements is a misdetection
+                    thetai= thetai(ind);
+                    if betai0(i) > 0            %The betai0 weight can be zero, in that case we get -Inf as weight, which is problematic
+                        llh = [llh;log(betai0(i))]; %On the other hand, if betai0=0 thetai should not be empty
+                        hypotheses = [hypotheses;states(i)];
+                    end
+ 
+                    if ~isempty(thetai)
+                        for j=1:length(thetai)
+                            hypotheses = [hypotheses; GaussianDensity.update(states(i),z(:,thetai(j)),measmodel)];
+                        end
+                        llh = [llh;log(betaij(i,thetai))'];
+                        %We do a merging of local hypotheses which
+                        %minimizes the KLD of the resulting approximation
+                        states(i) = GaussianDensity.momentMatching(llh,hypotheses);
+                    end
+                    %Note: if betai0 is zero it means that we get at least one
+                    %really strong detection. It cannot happen that betai0=0
+                    %and thetai is empty
 
-            % 1. implement ellipsoidal gating for each local hypothesis
-            % seperately; OK
-            % 2. construct 2D cost matrix of size (number of objects, number of measurements that at least fall inside the gates + number of objects);
-            % 3. find the M best assignment matrices using a M-best 2D assignment solver;
-            % 4. normalise the weights of different data association hypotheses;
-            % 5. prune assignment matrices that correspond to data association hypotheses with low weights and renormalise the weights;
-            % 6. create new local hypotheses for each of the data association results;
-            % 7. merge local hypotheses that correspond to the same object by moment matching;
-            % 8. extract object state estimates;
-            % 9. predict each local hypothesis.
+                end
+                %We extract object estimates
+                estimates{k} = [states.x];
+                %Prediction
+                states = arrayfun(@(state) GaussianDensity.predict(state,motionmodel), states);
+            end
+        end
+        
+        function estimates = TOMHT(obj, states, Z, sensormodel, motionmodel, measmodel)
+            %TOMHT tracks n object using track-oriented multi-hypothesis tracking
+            %INPUT: obj: an instantiation of n_objectracker class
+            %       states: structure array of size (1, number of objects)
+            %       with two fields: 
+            %                x: object initial state mean --- (object state
+            %                dimension) x 1 vector 
+            %                P: object initial state covariance --- (object
+            %                state dimension) x (object state dimension)
+            %                matrix  
+            %       Z: cell array of size (total tracking time, 1), each
+            %       cell stores measurements of size (measurement
+            %       dimension) x (number of measurements at corresponding
+            %       time step)  
+            %OUTPUT:estimates: cell array of size (total tracking time, 1),
+            %       each cell stores estimated object state of size (object
+            %       state dimension) x (number of objects)
+            N = length(states);
+            numSteps = length(Z);
+            md_llh = log(1-sensormodel.P_D);
+            H_prev = ones(1,N); %Initial LH Table; only one hypothesis per object
+            llh_prev = 0; %log(1), the global hypothesis is only one
+            localHyps_prev = cell(N,1); %Local hypotheses Hk-1_i(one hyp per object)
+            %This time it is necessary to group hypotheses for each object
+            %in separate groups. Using cells might be a good data structure
+            %to face this task
+            for i=1:N
+                localHyps_prev{i} = states(i);
+            end
+            estimates = cell(numSteps,1);
+            
+            for k=1:numSteps
+                z = cell2mat(Z(k));
+                M = size(z,2);
+                z_ingate = cell(N,1);
+                meas_in_gate = cell(N,1);
+                meas_occurrences = zeros(1,M);
+                %For each local hypothesis in each hypothesis tree
+                %Implement ellipsoidal gating
+                for i=1:N
+                    [z_ingate{i}, meas_in_gate{i}] = arrayfun(@(hyp) GaussianDensity.ellipsoidalGating(hyp,z,measmodel,obj.gating.size),localHyps_prev{i},'UniformOutput',false);
+                    meas_occurrences = meas_occurrences + sum([meas_in_gate{i}{:}],2)';
+                end
+                %I preferred to perform the gating at first, in order to be
+                %able to filter out all the measurements not falling in any
+                %gate. This simplifies alot the indexing phase later in the
+                %code.
+                indexes = find(meas_occurrences==0);
+                z(:,indexes) = [];
+                M = size(z,2);
+                llh_i = cell(N,1);
+                localHyps = cell(N,1);
+                %Calculate missed detection and predicted likelihood for
+                %each measurement inside the gate
+                for i=1:N
+                    Hk_i = length(localHyps_prev{i});
+                    %We know that the number of updated hypotheses for each
+                    %object is Hk_i*(mk+1) at time k. We conside M in the indexing
+                    %instead of the gated measurements size because it allows us to
+                    %use directly (or almost) the result from the kBest
+                    %assignment. To do so we initialize the logweights of
+                    %the hk_ith hypothesis as following
+                    llh_i{i} = -Inf(Hk_i*(M+1),1);
+                    for hk_i=1:Hk_i
+                        meas_in_gate{i}{hk_i}(indexes) = [];
+                        %Even if we consider M hypotheses here, we only
+                        %compute the update and the llh for the ones inside
+                        %the gate
+                        in_gate_indexes = find(meas_in_gate{i}{hk_i}==1)';
+                        for j=in_gate_indexes
+                            index = (hk_i-1)*(M+1)+j;
+                            llh_i{i}(index) = log(sensormodel.P_D) + GaussianDensity.predictedLikelihood(localHyps_prev{i}(hk_i),z(:,j),measmodel)...
+                                - log(sensormodel.intensity_c);
+                            localHyps{i}(index) = GaussianDensity.update(localHyps_prev{i}(hk_i),z(:,j),measmodel);
 
-            totalTrackTime = numel(Z);
-            estimates = cell(totalTrackTime,1);
-            num_objects = size(states , 2 );
-            log_detect = log(sensormodel.P_D / sensormodel.intensity_c);
-            log_miss  = log(1 - sensormodel.P_D);
-             M = obj.reduction.M;
-
-
-            for k = 1 : totalTrackTime
-                % Gating and cost matrix
-                z_k = Z{k};
-                mk = size( z_k , 2 );
-                L  =  inf(num_objects , num_objects + mk );
-                admitted = zeros(num_objects , mk );
-                for i = 1 : num_objects
-                    for j = 1 : mk 
-                    [~, index] = obj.density.ellipsoidalGating( states(i) , z_k(:,j), measmodel, obj.gating.size);
-                    admitted(i,j) = index;
-                    if index
-                             H_ih = measmodel.H(states(i).x);
-                             S_ih = H_ih*states(i).P*H_ih' + measmodel.R;
-                             inn_ih = z_k(:,j) - measmodel.h(states(i).x);
-                             lij = -log_detect ;
-                             lij = lij + 0.5*log(det(2*pi*S_ih));
-                             lij = lij + 0.5*((inn_ih)')*inv(S_ih)*(inn_ih);
-                             L(i,j) = lij;
+                        end
+                        %We compute here llh and a new hypothesis for the
+                        %misdetection case
+                        index = (hk_i-1)*(M+1)+M+1;
+                        llh_i{i}(index) = md_llh;
+                        localHyps{i}(index) = localHyps_prev{i}(hk_i);
+                    end
+                end
+                
+                H = [];
+                llh = [];
+                %For each predicted global hypothesis
+                for hk=1:size(H_prev,1)
+                    %We create the cost matrix
+                    L = Inf(N,M+N);
+                    
+                    for i=1:N
+                        startIndex = (H_prev(hk,i)-1)*(M+1)+1;
+                        endIndex = startIndex + M - 1;
+                        L(i,1:M) = -llh_i{i}(startIndex:endIndex)';
+                        L(i,M+i) = -llh_i{i}(endIndex+1);
+                    end
+                    %We obtain the M best assignments using the solver
+                    [col4rowBest, ~, gain] = kBest2DAssign(L,ceil(exp(llh_prev(hk))*obj.reduction.M));
+                    
+                    %Considering that the misdetection costs are standing
+                    %on the diagonal of the right submatrix, their indexes
+                    %will not be suitable directly for the local
+                    %hypotheses. Given that we took the precaution of
+                    %considering M instead of the gate measurements size,
+                    %it will be necessary just to fix the i-th misdetection cost
+                    %to the column M+1
+                    for i=1:N
+                        col4rowBest(i,col4rowBest(i,:)>M) = M+1;
+                    end
+                    
+                    %Having now the best assignments, we can update the
+                    %global LUT
+                    G = length(gain);
+                    
+                    for g=1:G
+                        %Update of the logweights
+                        llh(end+1,1) = llh_prev(hk) - gain(g);
+                        %Update of the LH Table
+                        H(end+1,:) = zeros(1,N);
+                        for i=1:N
+                            H(end,i) = (H_prev(hk,i)-1)*(M+1) + col4rowBest(i,g);
                         end
                     end
-                    L( i , mk + i ) = log_miss;
-                end
-                % if the column sum of inf elements is == to num objects
-                % its full of inf values 
-                noninf_cols = sum(isinf(L)) < num_objects;
-                L = L(:, noninf_cols);
-                z_k = z_k(:, noninf_cols(1:mk));
-                mk = size(z_k,2) ; 
-                %%%%%%%%%%%%%%%%
 
-                % Find M assignments i e data associations
-                [theta, ~, ~]= kBest2DAssign(L, M);
-                %%%%%%%%%%%%%%%%%%%%%%%%%
-                
-                % Normalize log weights. There might not be as hypotheses
-                % as data associations. Why ? 
-                M = size(theta , 2) ;
-                log_w = zeros(M , 1 );
-                for iM = 1 : M
-                    % sum over the every row ( objects ) and the specific
-                    % data association column
-                    tr_AL = sum(L(sub2ind(size(L),1:num_objects, theta(:,iM)')));
-                    log_w(iM) = -tr_AL;
                 end
-                %give a value to the misdetection
-                theta(theta>mk) = mk + 1 ;
-                log_w = normalizeLogWeights(log_w) ; 
-                %%%%%%%%%%%%%%%%%%%%%%%%%%%
-                % 5. prune assignment matrices that correspond to data association
-                % hypotheses with low weights and renormalise the weights
                 
-                % hypo index
-                hyp = 1 : M ; 
-                [log_w, hyp] = hypothesisReduction.prune( log_w, hyp, obj.reduction.w_min );
-                theta = theta(:,hyp);
-                log_w = normalizeLogWeights(log_w) ; 
-
-                %%%%%%%%%%%%%%%%%%%%%
-                % 6. create new local hypotheses for each of the data association results;
-                beta = zeros(num_objects,mk+1);   % marg. prob that a object i=1:n is associated to meas. j=0:m
-                % since its a marginal of i we need to saturate over the
-                % measurements
+                %Normalise global hypothesis weights and perform pruning
+                %and capping
+                llh = normalizeLogWeights(llh);
+                [llh, indexes] = hypothesisReduction.prune(llh,1:length(llh),obj.reduction.w_min);
+                llh = normalizeLogWeights(llh);
+                H = H(indexes,:);
+                [llh, indexes] = hypothesisReduction.cap(llh,1:length(llh),obj.reduction.M);
+                llh = normalizeLogWeights(llh);
+                H = H(indexes,:);
                 
-                for i = 1 : num_objects
-                    for i_theta = 1 : size(theta , 2 )
-                        % take the measurement index
-                        j = theta(i,i_theta); % object i is associated to which meas. j in data ass. i_theta
-                        beta(i,j) = beta(i,j) + exp(log_w(i_theta));
+                %Prune the local hypotheses not falling in any of the
+                %global hypotheses
+                for i=1:N
+                    hk_i = unique(H(:,i));
+                    localHyps{i} = localHyps{i}(hk_i);
+                    llh_i{i} = llh_i{i}(hk_i);
+                    llh_i{i} = normalizeLogWeights(llh_i{i});
+                    %Reindex the global hypothesis LUT
+                    for j=1:length(hk_i)
+                        H(H(:,i)==hk_i(j),i) = j;
                     end
                 end
-                % if we saturate over the objects now ( row sum ) we get 1
-                % as every object is either misdetected of identified
-                %sum(beta , 2)
-
-                %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-            % 7. merge local hypotheses that correspond to the same object by moment matching;  
-
-                for i = 1 : num_objects
-                    P_pred = states(i).P;
-                    x_pred = states(i).x;
-
-                     H = measmodel.H(x_pred);
-                     innCov = H*P_pred*H' + measmodel.R;
-                     innCov = 0.5*(innCov + innCov');
-                     K = P_pred*H'*inv(innCov);
-                    
-                     eps_mu = zeros(size(z_k , 1) , 1);
-                     eps_cov = zeros( size(z_k , 1 ) , size(z_k , 1) ) ; 
-
-                     for j = 1 : mk
-                         eps_ij = z_k(:,j) - measmodel.h(x_pred) ;
-                         % weighted average innovation
-                         eps_mu = eps_mu  +  beta(i,j)*eps_ij;
-                         eps_cov = eps_cov + beta(i,j)*eps_ij*eps_ij';
-
-
-                     end
-                     
-                     P_bar_i = P_pred - K*(innCov)*K' ;
-                    P_tilde_i = K * ( eps_cov - eps_mu*eps_mu' ) * K' ;
-
-                     states(i).x = x_pred + K * eps_mu ;
-                     % covariance increases  ( as it should )
-                     states(i).P = beta(i,mk+1)*P_pred + ...
-                         (1 - beta(i,mk+1) ) * P_bar_i + ...
-                         P_tilde_i ; 
+                
+                %Exctract object state estimates from the global hypothesis
+                %with the highest weight
+                [~,llh_star] = max(llh);
+                H_star = H(llh_star,:);
+                
+                for i=1:N
+                    estimates{k}(:,i) = localHyps{i}(H_star(i)).x;
                 end
                 
-                % now i think we should have less hypothesis than when
-                % started , but we have multiple copies of them
-                %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-               % 8. extract object state estimates;
-
-               for i =   1    :   num_objects
-                    estimates{k}(:,i) = states(i).x;
-               end
-
-
-               %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-               % 9. predict each local hypothesis. array fun applies the
-               % function using each index of states as input to the call
-              states = arrayfun(@(s) obj.density.predict(s,motionmodel), states );
-
-
-         
+                
+                %We predict each local hypothesis in each hypothesis tree
+                for i=1:N
+                    localHyps{i} = arrayfun(@(hyp) GaussianDensity.predict(hyp,motionmodel), localHyps{i});
+                end
+                
+                %We set the actual hypotheses, LUT and global weights to be
+                %the old ones for the next iteration
+                localHyps_prev = localHyps;
+                H_prev = H;
+                llh_prev = llh;
+                
             end
-
-
-
-            
-end     
-
-%%%%%%%%%%%%%%%%%%%
-
+        end
     end
 end
