@@ -1,4 +1,4 @@
-                                            classdef multiobjectracker
+classdef multiobjectracker
     %MULTIOBJECTRACKER is a class containing functions to track multiple
     %object in clutter. 
     %Model structures need to be called:
@@ -147,6 +147,7 @@
             
             for k = 1:K
                 %PMBM update
+           
                 PMBM = PMBM_update(PMBM,Z{k},measmodel,sensormodel,obj.gating,obj.reduction.w_min,obj.reduction.M);
                 %Object state extraction
                 estimates{k} = PMBM_estimator(PMBM,obj.r_estimate);
